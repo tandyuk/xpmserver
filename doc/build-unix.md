@@ -26,6 +26,7 @@ Dependencies
  libboost    Boost             C++ Library
  miniupnpc   UPnP Support      Optional firewall-jumping support
 
+
 [miniupnpc](http://miniupnp.free.fr/) may be used for UPnP port mapping.  It can be downloaded from [here](
 http://miniupnp.tuxfamily.org/files/).  UPnP support is compiled in and
 turned off by default.  Set USE_UPNP to a different value to control this:
@@ -57,6 +58,14 @@ Build requirements:
 
 	sudo apt-get install build-essential
 	sudo apt-get install libssl-dev
+
+for debian 8: 
+wget https://download.opensuse.org/repositories/network:/messaging:/zeromq:/release-stable/Debian_8.0/Release.key -O- | sudo apt-key add
+echo ""deb http://download.opensuse.org/repositories/network:/messaging:/zeromq:/release-stable/Debian_8.0/ ./" >> /etc/apt/sources.list
+apt-get install git build-essential libssl-dev libdb++-dev libboost-all-dev libczmq-dev 
+git clone https://github.com/tandyuk/xpmserver
+cd xpmserver/src
+make -f makefile.unix test
 
 for Ubuntu 12.04:
 
