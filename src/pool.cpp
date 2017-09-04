@@ -53,9 +53,9 @@ PrimeWorker::PrimeWorker(CWallet* pwallet, unsigned threadid, unsigned target)
 }
 
 
-void PrimeWorker::InvokeWork(void *args, zctx_t *ctx, void *pipe){
+void PrimeWorker::InvokeWork(zsock_t *pipe, void *args){
 	
-	((PrimeWorker*)args)->Work(ctx, pipe);
+	((PrimeWorker*)args)->Work(pipe);
 	
 }
 
@@ -84,64 +84,63 @@ int PrimeWorker::InvokeTimerFunc(zloop_t *wloop, int timer_id, void *arg) {
 }
 
 
-void PrimeWorker::Work(zctx_t *ctx, void *pipe) {
+int PrimeWorker::zactor_term(zloop_t *wloop, zsock_t *pipe, void *arg) {
+	char *msg = zstr_recv(pipe);
+	if (msg && !strcmp("$TERM", msg)) {
+		free(msg);
+		return -1;
+	}
+	free(msg);
+	return 0;
+}
+
+void PrimeWorker::Work(zsock_t *pipe) {
 	
 	printf("PrimeWorker started.\n");
-	
-	void* frontend = zsocket_new(ctx, ZMQ_DEALER);
-	void* input = zsocket_new(ctx, ZMQ_SUB);
-	mServer = zsocket_new(ctx, ZMQ_ROUTER);
-	mSignals = zsocket_new(ctx, ZMQ_PUB);
-	
-	int err = 0;
-	err = zsocket_bind(mServer, "tcp://*:%d", mServerPort);
-	if(!err)
-		printf("zsocket_bind(mServer, tcp://*:*) failed.\n");
-	
-	err = zsocket_bind(mSignals, "tcp://*:%d", mSignalPort);
-	if(!err)
-		printf("zsocket_bind(mSignals, tcp://*:*) failed.\n");
+
+	char endpoint [32];
+	sprintf(endpoint, "tcp://*:%d", mServerPort);
+	mServer = zsock_new_router(endpoint);
+	assert (mServer);
+	sprintf(endpoint, "tcp://*:%d", mSignalPort);
+	mSignals = zsock_new_pub(endpoint);
+	assert (mSignals);
+	zsock_t *frontend = zsock_new_dealer("inproc://frontend");
+	assert (frontend);
+	zsock_t *input = zsock_new_sub("inproc://bitcoin", "\1");
+	assert (input);
 	
 	printf("PrimeWorker: mServerPort=%d mSignalPort=%d\n", mServerPort, mSignalPort);
 	
-	err = zsocket_connect(frontend, "inproc://frontend");
-	assert(!err);
-	
-	err = zsocket_connect(input, "inproc://bitcoin");
-	assert(!err);
-	
-	const char one[2] = {1, 0};
-	zsocket_set_subscribe(input, one);
-	
 	zloop_t* wloop = zloop_new();
 	
-	zmq_pollitem_t item_input = {input, 0, ZMQ_POLLIN, 0};
-	err = zloop_poller(wloop, &item_input, &PrimeWorker::InvokeInput, this);
+	zmq_pollitem_t item_input = {zsock_resolve(input), 0, ZMQ_POLLIN, 0};
+	int err = zloop_poller(wloop, &item_input, &PrimeWorker::InvokeInput, this);
 	assert(!err);
 	
-	zmq_pollitem_t item_server = {mServer, 0, ZMQ_POLLIN, 0};
+	zmq_pollitem_t item_server = {zsock_resolve(mServer), 0, ZMQ_POLLIN, 0};
 	err = zloop_poller(wloop, &item_server, &PrimeWorker::InvokeRequest, this);
 	assert(!err);
 	
-	zmq_pollitem_t item_frontend = {frontend, 0, ZMQ_POLLIN, 0};
+	zmq_pollitem_t item_frontend = {zsock_resolve(frontend), 0, ZMQ_POLLIN, 0};
 	err = zloop_poller(wloop, &item_frontend, &PrimeWorker::InvokeRequest, this);
 	assert(!err);
 	
 	err = zloop_timer(wloop, 60000, 0, &PrimeWorker::InvokeTimerFunc, this);
 	assert(err >= 0);
+
+	err = zloop_reader(wloop, pipe, &PrimeWorker::zactor_term, NULL);
 	
-	zsocket_signal(pipe);
+	zsock_signal(pipe, 0);
 	
 	zloop_start(wloop);
 	
 	zloop_destroy(&wloop);
 	
-	zsocket_destroy(ctx, mServer);
-	zsocket_destroy(ctx, mSignals);
-	zsocket_destroy(ctx, frontend);
-	zsocket_destroy(ctx, input);
-	
-	zsocket_signal(pipe);
+	zsock_destroy(&mServer);
+	zsock_destroy(&mSignals);
+	zsock_destroy(&frontend);
+	zsock_destroy(&input);
 	
 	printf("PrimeWorker exited.\n");
 	
@@ -587,56 +586,27 @@ int PrimeWorker::HandleRequest(zmq_pollitem_t *item) {
 
 
 
-PoolFrontend::PoolFrontend(zctx_t *ctx, unsigned port) {
+PoolFrontend::PoolFrontend(unsigned port) {
 	
 	printf("PoolFrontend started on port %d.\n", port);
 	
 	mPort = port;
-	mDealer = 0;
-	mRouter = 0;
 	
-	mPipe = zthread_fork(ctx, &PoolFrontend::InvokeProxy, this);
+	mPipe = zactor_new(zproxy, this);
+	zstr_sendx(mPipe, "FRONTEND", "DEALER", "inproc://frontend", NULL);
+	zsock_wait(mPipe);
+	char endpoint [32];
+	sprintf(endpoint, "tcp://*:%d", mPort);
+	zstr_sendx(mPipe, "BACKEND", "ROUTER", endpoint, NULL);
+	zsock_wait(mPipe);
 	
 }
 
 PoolFrontend::~PoolFrontend() {
-	
+	zactor_destroy (&mPipe);
 	printf("PoolFrontend stopped.\n");
 	
 }
-
-
-void PoolFrontend::InvokeProxy(void *arg, zctx_t *ctx, void *pipe) {
-	
-	((PoolFrontend*)arg)->ProxyLoop(ctx, pipe);
-	
-}
-
-void PoolFrontend::ProxyLoop(zctx_t *ctx, void *pipe) {
-	
-	mDealer = zsocket_new(ctx, ZMQ_DEALER);
-	mRouter = zsocket_new(ctx, ZMQ_ROUTER);
-	
-	zsocket_bind(mDealer, "inproc://frontend");
-	unsigned ret = zsocket_bind(mRouter, "tcp://*:%d", mPort);
-	if(ret != mPort){
-		printf("Frontend: ERROR: zsocket_bind failed.\n");
-		exit(-1);
-	}
-	
-	zmq_proxy(mRouter, mDealer, 0);
-	
-	printf("PoolFrontend shutdown.\n");
-	
-	/*zsocket_destroy(ctx, mRouter);
-	zsocket_destroy(ctx, mDealer);
-	
-	zsocket_signal(pipe);*/
-	
-}
-
-
-
 
 PoolServer::PoolServer(CWallet* pwallet) {
 	
@@ -644,12 +614,10 @@ PoolServer::PoolServer(CWallet* pwallet) {
 	
 	mWallet = pwallet;
 	
-	mCtx = zctx_new();
+	mFrontend = new PoolFrontend(GetArg("-frontport", 6666));
 	
-	mFrontend = new PoolFrontend(mCtx, GetArg("-frontport", 6666));
-	
-	mWorkerSignals = zsocket_new(mCtx, ZMQ_PUB);
-	zsocket_bind(mWorkerSignals, "inproc://bitcoin");
+	mWorkerSignals = zsock_new_pub("inproc://bitcoin");
+	assert(mWorkerSignals);
 	
 	mMinShare = GetArg("-minshare", 8);
 	mTarget = GetArg("-target", 10);
@@ -660,8 +628,7 @@ PoolServer::PoolServer(CWallet* pwallet) {
 		
 		PrimeWorker* worker = new PrimeWorker(mWallet, i, mTarget);
 		
-		void* pipe = zthread_fork(mCtx, &PrimeWorker::InvokeWork, worker);
-		zsocket_wait(pipe);
+		zactor_t* pipe = zactor_new(&PrimeWorker::InvokeWork, worker);
 		
 		mWorkers.push_back(std::make_pair(worker, pipe));
 		
@@ -680,13 +647,12 @@ PoolServer::~PoolServer(){
 	
 	for(unsigned i = 0; i < mWorkers.size(); ++i){
 		
-		zsocket_wait(mWorkers[i].second);
+		zsock_wait(mWorkers[i].second);
 		delete mWorkers[i].first;
 		
 	}
 	
-	zsocket_destroy(mCtx, mWorkerSignals);
-	zctx_destroy(&mCtx);
+	zsock_destroy(&mWorkerSignals);
 	
 	printf("PoolServer stopped.\n");
 	
@@ -712,7 +678,7 @@ void PoolServer::NotifyNewBlock(CBlockIndex* pindex) {
 }
 
 
-void PoolServer::SendSignal(proto::Signal& sig, void* socket) {
+void PoolServer::SendSignal(proto::Signal& sig, zsock_t* socket) {
 	
 	size_t fsize = sig.ByteSize()+1;
 	zframe_t* frame = zframe_new(0, fsize);
