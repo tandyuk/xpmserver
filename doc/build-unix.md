@@ -62,7 +62,7 @@ Build requirements:
 for debian 8: 
 wget https://download.opensuse.org/repositories/network:/messaging:/zeromq:/release-stable/Debian_8.0/Release.key -O- | sudo apt-key add
 echo ""deb http://download.opensuse.org/repositories/network:/messaging:/zeromq:/release-stable/Debian_8.0/ ./" >> /etc/apt/sources.list
-apt-get install git build-essential libssl-dev libdb++-dev libboost-all-dev libczmq-dev 
+apt-get install git build-essential libssl-dev libdb++-dev libboost-all-dev libczmq-dev libprotoc-dev libprotobuf-dev
 git clone https://github.com/tandyuk/xpmserver
 cd xpmserver/src
 make -f makefile.unix test
