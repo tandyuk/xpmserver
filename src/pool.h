@@ -55,18 +55,19 @@ public:
 	
 	PrimeWorker(CWallet* pwallet, unsigned threadid, unsigned target);
 	
-	static void InvokeWork(void *args, zctx_t *ctx, void *pipe);
+	static void InvokeWork(zsock_t *pipe, void *args);
 	
 	static int InvokeInput(zloop_t *wloop, zmq_pollitem_t *item, void *arg);
 	static int InvokeRequest(zloop_t *wloop, zmq_pollitem_t *item, void *arg);
 	static int InvokeTimerFunc(zloop_t *loop, int timer_id, void *arg);
+	static int zactor_term(zloop_t *wloop, zsock_t *pipe, void *arg);
 	
 	zmsg_t* ReceiveRequest(proto::Request& req, void* socket);
 	static void SendReply(const proto::Reply& rep, zmsg_t** msg, void* socket);
 	
 protected:
 	
-	void Work(zctx_t *ctx, void *pipe);
+	void Work(zsock_t *pipe);
 	
 	int HandleInput(zmq_pollitem_t *item);
 	int HandleBackend(zmq_pollitem_t *item);
@@ -86,8 +87,8 @@ private:
 	std::string mName;
 	unsigned mThreadID;
 	
-	void* mSignals;
-	void* mServer;
+	zsock_t* mSignals;
+	zsock_t* mServer;
 	
 	int mServerPort;
 	int mSignalPort;
@@ -123,19 +124,19 @@ private:
 class PoolFrontend {
 public:
 	
-	PoolFrontend(zctx_t *ctx, unsigned port);
+	PoolFrontend(unsigned port);
 	~PoolFrontend();
 	
-	static void InvokeProxy(void *arg, zctx_t *ctx, void *pipe);
-	void ProxyLoop(zctx_t *ctx, void *pipe);
+	static void InvokeProxy(void *arg, void *pipe);
+	void ProxyLoop(void *pipe);
 	
 private:
 	
 	unsigned mPort;
 	
-	void* mRouter;
-	void* mDealer;
-	void* mPipe;
+	zsock_t* mRouter;
+	zsock_t* mDealer;
+	zactor_t* mPipe;
 	
 };
 
@@ -149,7 +150,7 @@ public:
 	
 	virtual void NotifyNewBlock(CBlockIndex* pindex);
 	
-	static void SendSignal(proto::Signal& signal, void* socket);
+	static void SendSignal(proto::Signal& signal, zsock_t* socket);
 	
 	
 private:
@@ -160,9 +161,7 @@ private:
 	
 	std::vector<std::pair<PrimeWorker*, void*> > mWorkers;
 	
-	zctx_t* mCtx;
-	
-	void* mWorkerSignals;
+	zsock_t* mWorkerSignals;
 	
 	int mMinShare;
 	int mTarget;
